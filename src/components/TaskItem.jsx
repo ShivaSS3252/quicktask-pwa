@@ -1,6 +1,17 @@
 // src/components/TaskItem.jsx
 
 export const TaskItem = ({ task, onToggle, onDelete }) => {
+  const handleShare = async (task) => {
+    try {
+      await navigator.share({
+        title: 'QuickTask',
+        text: task.text,
+        url: window.location.href
+      })
+    } catch (err) {
+      console.log('Share failed or was cancelled:', err)
+    }
+  }
   return (
     <div className="flex items-center gap-3 bg-gray-800 border border-gray-700
                     rounded-xl px-4 py-3 group transition-all">
@@ -32,6 +43,18 @@ export const TaskItem = ({ task, onToggle, onDelete }) => {
         <span className="text-xs text-yellow-400 bg-yellow-400/10 px-2 py-0.5 rounded-full">
           pending
         </span>
+      )}
+
+      {/* Share button */}
+      {navigator.share && (
+        <button
+          onClick={() => handleShare(task)}
+          className="text-gray-600 hover:text-blue-400 transition-colors opacity-0
+                     group-hover:opacity-100 text-lg leading-none mr-1"
+          title="Share task"
+        >
+          📤
+        </button>
       )}
 
       {/* Delete button */}
