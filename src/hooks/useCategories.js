@@ -211,23 +211,64 @@ export const useCategories = () => {
     }
   }
 
-  // ── SSE handlers ──────────────────────────────────────────────────────
-  // If WE just mutated, skip SSE refresh — it's our own broadcast coming back
-  const addCategoryFromSSE = async () => {
-    if (isMutating.current) return   // ← this is the key fix
-    await fetchAndSet()
-  }
+ // ── SSE handlers ──────────────────────────────────────────────────────
+// If WE just mutated, skip SSE refresh — it's our own broadcast coming back
 
-  const updateCategoryFromSSE = async () => {
-    if (isMutating.current) return
-    await fetchAndSet()
-  }
+const addCategoryFromSSE = async (category) => {
+  if (isMutating.current) return
 
-  const removeCategoryFromSSE = async (id) => {
-    if (isMutating.current) return
-    setCategories((prev) => prev.filter((c) => c._id !== id))
+  try {
+    // Save directly to IndexedDB
+    await saveSingleCategory(category)
+
+    // Update React state
+    setCategories((prev) => {
+      const exists = prev.find((c) => c._id === category._id)
+
+      if (exists) {
+        return prev.map((c) => (c._id === category._id ? category : c))
+      }
+
+      const merged = [category, ...prev]
+      const map = new Map(merged.map((c) => [c._id, c]))
+      return Array.from(map.values()).sort(
+        (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+      )
+    })
+  } catch (err) {
+    console.error('SSE NEW_CATEGORY sync failed:', err)
+  }
+}
+
+const updateCategoryFromSSE = async (category) => {
+  if (isMutating.current) return
+
+  try {
+    // Update IndexedDB
+    await saveSingleCategory(category)
+
+    // Update React state
+    setCategories((prev) =>
+      prev.map((c) => (c._id === category._id ? category : c))
+    )
+  } catch (err) {
+    console.error('SSE UPDATED_CATEGORY sync failed:', err)
+  }
+}
+
+const removeCategoryFromSSE = async (id) => {
+  if (isMutating.current) return
+
+  try {
+    // Remove from IndexedDB
     await deleteCategoryFromDB(id)
+
+    // Update React state
+    setCategories((prev) => prev.filter((c) => c._id !== id))
+  } catch (err) {
+    console.error('SSE DELETED_CATEGORY sync failed:', err)
   }
+}
 
   return {
     categories, loading,
