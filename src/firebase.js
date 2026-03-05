@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { getMessaging, getToken, onMessage } from 'firebase/messaging'
+import { getMessaging, getToken, onMessage, deleteToken } from 'firebase/messaging'
 
 const firebaseConfig = {
   apiKey: "AIzaSyCWHKZySuqVbu52sbYElBsA3jpWE2alZTU",
@@ -7,23 +7,14 @@ const firebaseConfig = {
   projectId: "quicktask-pwa-f9772",
   storageBucket: "quicktask-pwa-f9772.firebasestorage.app",
   messagingSenderId: "536975548786",
-  appId: "1:536975548786:web:cfaaca11a990b44651bdeb",
-  measurementId: "G-HHXPVZYRT1"
+  appId: "1:536975548786:web:cfaaca11a990b44651bdeb"
 }
 
 const app = initializeApp(firebaseConfig)
-
-// ✅ Don't initialize messaging at top level
 let messaging = null
 
-const getMessagingInstance = async () => {
-  if (messaging) return messaging
-  
-  // Register Firebase SW first
-  const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
-  
-  // Now initialize messaging with that SW
-  messaging = getMessaging(app)
+const getMessagingInstance = () => {
+  if (!messaging) messaging = getMessaging(app)
   return messaging
 }
 
@@ -32,31 +23,41 @@ export const requestNotificationPermission = async () => {
     const permission = await Notification.requestPermission()
     if (permission !== 'granted') return null
 
-    const msg = await getMessagingInstance()
+    const msg = getMessagingInstance()
 
-    const swReg = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js')
+    // Use main SW instead of separate Firebase SW
+    // This avoids scope conflict
+    const swReg = await navigator.serviceWorker.ready
+    console.log('Using SW:', swReg.active?.scriptURL)
+
+    try {
+      await deleteToken(msg)
+    } catch {
+      // no existing token
+    }
 
     const token = await getToken(msg, {
       vapidKey: 'BCSIEyqxxH2jYUq4KkVlbo7obPfnGyIS_ce7iBnWPgbTTUGa2306vYYjCkW7Kk22_caHA_blSZgFZTdHr8TkSgU',
-      serviceWorkerRegistration: swReg
+      serviceWorkerRegistration: swReg, // main SW handles everything
     })
 
     if (token) {
+      console.log('Fresh FCM Token:', token)
       localStorage.setItem('fcm_token', token)
       return token
     }
 
     return null
   } catch (err) {
-    console.error('Failed to get FCM token:', err)
+    console.error('FCM setup failed:', err)
     return null
   }
 }
 
-export const onForegroundMessage = async (callback) => {
-  const msg = await getMessagingInstance()
+export const onForegroundMessage = (callback) => {
+  const msg = getMessagingInstance()
   return onMessage(msg, (payload) => {
-    console.log('Foreground message received:', payload)
+    console.log('Foreground message:', payload)
     callback(payload)
   })
 }

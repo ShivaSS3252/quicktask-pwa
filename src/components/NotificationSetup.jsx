@@ -6,95 +6,100 @@ export const NotificationSetup = () => {
   const [permission, setPermission] = useState(Notification.permission)
   const [token, setToken] = useState(localStorage.getItem('fcm_token'))
   const [notification, setNotification] = useState(null)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-  if (permission !== 'granted') return
+    if (permission !== 'granted') return
 
-  let unsubscribe = null
-
-  const registerListener = async () => {
-    unsubscribe = await onForegroundMessage((payload) => {
-      console.log('FOREGROUND MESSAGE HIT:', payload)
-      setNotification({
-        title: payload.notification?.title || 'Task Reminder',
-        body: payload.notification?.body || 'Check your tasks!'
-      })
-      setTimeout(() => setNotification(null), 5000)
+    const unsubscribe = onForegroundMessage((payload) => {
+      showBanner(payload.notification?.title, payload.notification?.body)
     })
-  }
 
-  registerListener()
+    const handleSWMessage = (event) => {
+      if (event.data?.type === 'PUSH_RECEIVED') {
+        const { title, body } = event.data.payload.notification
+        showBanner(title, body)
+      }
+    }
 
-  return () => {
-    if (unsubscribe) unsubscribe()
+    navigator.serviceWorker.addEventListener('message', handleSWMessage)
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+      navigator.serviceWorker.removeEventListener('message', handleSWMessage)
+    }
+  }, [permission])
+
+  const showBanner = (title, body) => {
+    setNotification({ title, body })
+    setTimeout(() => setNotification(null), 5000)
   }
-}, [permission])
 
   const handleEnable = async () => {
+    setLoading(true)
     const fcmToken = await requestNotificationPermission()
-    if (fcmToken) {
-      setToken(fcmToken)
-      setPermission('granted')
-    } else {
-      setPermission(Notification.permission)
-    }
+    if (fcmToken) { setToken(fcmToken); setPermission('granted') }
+    else setPermission(Notification.permission)
+    setLoading(false)
   }
-console.log("erhjlgre",token,permission,permission === 'granted' && token,notification)
-  // Already granted — show token info
+
+  // In-app push banner
+  const InAppBanner = () => notification ? (
+    <div className="flex items-start gap-3 bg-indigo-500/[0.08] border border-indigo-500/20 rounded-xl px-4 py-3 mb-3">
+      <span className="text-lg flex-shrink-0">🔔</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-bold text-indigo-400">{notification.title}</p>
+        <p className="text-xs text-white/40 mt-0.5 leading-snug">{notification.body}</p>
+      </div>
+      <button onClick={() => setNotification(null)}
+        className="text-white/30 hover:text-white text-lg leading-none flex-shrink-0">×</button>
+    </div>
+  ) : null
+
+  // Granted state
   if (permission === 'granted' && token) {
     return (
       <>
-        {/* In-app notification banner */}
-        {notification && (
-          <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl
-                          px-4 py-3 mb-4 flex items-start gap-3">
-            <span className="text-xl">🔔</span>
-            <div>
-              <p className="text-indigo-300 font-semibold text-sm">{notification.title}</p>
-              <p className="text-gray-400 text-xs">{notification.body}</p>
-            </div>
-            <button
-              onClick={() => setNotification(null)}
-              className="ml-auto text-gray-500 hover:text-white"
-            >×</button>
+        <InAppBanner />
+        <div className="flex items-center gap-3 bg-emerald-500/[0.06] border border-emerald-500/15 rounded-xl px-4 py-2.5 mb-4">
+          <span className="text-sm">🔔</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-emerald-400">Push notifications enabled</p>
+            <p className="text-[10px] text-white/20 mt-0.5 font-mono truncate">{token.slice(0, 28)}...</p>
           </div>
-        )}
-
-        <div className="bg-green-500/10 border border-green-500/20 rounded-xl
-                        px-4 py-3 mb-4">
-          <p className="text-green-400 text-xs font-medium">
-            🔔 Push notifications enabled
-          </p>
-          <p className="text-gray-600 text-xs mt-1 break-all">
-            Token: {token.slice(0, 30)}...
-          </p>
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 shadow-sm shadow-emerald-400/50" />
         </div>
       </>
     )
   }
 
-  // Denied
+  // Denied state
   if (permission === 'denied') {
     return (
-      <div className="bg-red-500/10 border border-red-500/20 rounded-xl
-                      px-4 py-3 mb-4">
-        <p className="text-red-400 text-xs">
-          🔕 Notifications blocked — enable in browser settings
+      <div className="flex items-center gap-3 bg-red-500/[0.06] border border-red-500/15 rounded-xl px-4 py-2.5 mb-4">
+        <span className="text-sm">🔕</span>
+        <p className="text-xs text-red-400 font-medium">
+          Notifications blocked — enable in browser settings
         </p>
       </div>
     )
   }
 
-  // Default — show enable button
+  // Default — prompt to enable
   return (
     <button
       onClick={handleEnable}
-      className="w-full bg-gray-800 hover:bg-gray-700 border border-gray-700
-                 hover:border-indigo-500 text-gray-300 text-sm rounded-xl
-                 px-4 py-3 mb-4 transition-all flex items-center gap-2"
+      disabled={loading}
+      className="w-full flex items-center gap-3 bg-transparent hover:bg-white/[0.03] border border-dashed border-white/10 hover:border-indigo-500/30 rounded-xl px-4 py-3 mb-4 transition-all duration-200 group cursor-pointer text-left"
     >
-      <span>🔔</span>
-      <span>Enable push notifications for task reminders</span>
+      <span className="text-base">{loading ? '⏳' : '🔔'}</span>
+      <span className="text-xs font-medium text-white/35 group-hover:text-white/60 transition-colors flex-1">
+        {loading ? 'Setting up notifications...' : 'Enable push notifications for reminders'}
+      </span>
+      {!loading && (
+        <span className="text-[10px] font-bold bg-indigo-500/15 text-indigo-400 px-2.5 py-1 rounded-full flex-shrink-0">
+          Recommended
+        </span>
+      )}
     </button>
   )
 }

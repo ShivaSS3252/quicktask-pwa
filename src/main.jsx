@@ -6,12 +6,11 @@ import App from './App.jsx'
 
 const updateSW = registerSW({
   onNeedRefresh() {
-    // In production you'd show a "Update available" toast
-    console.log('New content available, refresh to update')
-    updateSW(true) // auto update for now
+    console.log('New content available')
+    updateSW(true)
   },
   onOfflineReady() {
-    console.log('App is ready to work offline!')
+    console.log('App ready to work offline!')
   },
   onRegistered(registration) {
     console.log('SW registered:', registration)
