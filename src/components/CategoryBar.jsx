@@ -232,7 +232,7 @@ export const CategoryBar = ({ categories, selected, onSelect, onCreate, onUpdate
                 />
                 {cat.name}
                 {/* Task count */}
-                {cat.taskCount > 0 && (
+                {/* {cat.taskCount > 0 && (
                   <span
                     style={{
                       fontSize: '10px',
@@ -245,7 +245,7 @@ export const CategoryBar = ({ categories, selected, onSelect, onCreate, onUpdate
                   >
                     {cat.taskCount}
                   </span>
-                )}
+                )} */}
                 {/* Pending badge */}
                 {isPending && (
                   <span
