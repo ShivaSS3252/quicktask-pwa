@@ -1,5 +1,5 @@
 // src/hooks/useTasks.js
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   addTask, getAllTasks, updateTask, deleteTask,
   getPendingTasks, addPendingOp, getAllPendingOps, deletePendingOp,
@@ -20,20 +20,25 @@ const checkRealConnectivity = async () => {
 }
 
 export const useTasks = (selectedCategory = null) => {
-  const [tasks, setTasks] = useState([])
+  // ALL tasks always stored here — never filtered in state
+  const [allTasks, setAllTasks] = useState([])
   const [loading, setLoading] = useState(true)
 
-  // Tracks if a mutation (create/edit/toggle/delete) is in progress
-  // loadTasks will skip its final setTasks if this is true
-  // — prevents race where loadTasks overwrites a just-created task
   const isMutating = useRef(false)
-
-  // Tracks the latest loadTasks call so stale ones don't overwrite fresh state
   const loadGeneration = useRef(0)
 
+  // Filter happens here — pure frontend, instant, no re-fetch
+  // Switching categories never causes a flash or wrong count
+  const tasks = useMemo(() => {
+    const visible = allTasks.filter((t) => !t.isDeleted)
+    if (!selectedCategory) return visible
+    return visible.filter((t) => t.category === selectedCategory)
+  }, [allTasks, selectedCategory])
+
+  // Load ONCE on mount — not on every category change
   useEffect(() => {
     loadTasks()
-  }, [selectedCategory])
+  }, [])
 
   useEffect(() => {
     const handleOnline = async () => {
@@ -47,34 +52,29 @@ export const useTasks = (selectedCategory = null) => {
 
   // ── Load ───────────────────────────────────────────────────────────────
   const loadTasks = async () => {
-    // Each call gets a generation number
-    // If a newer call starts, the old one won't overwrite state
     const generation = ++loadGeneration.current
 
     try {
       setLoading(true)
 
-      // Step 1: Show IndexedDB cache immediately
+      // Step 1: Show ALL tasks from IndexedDB cache immediately
       const stored = await getAllTasks()
-      let cached = stored.filter((t) => !t.isDeleted)
-      if (selectedCategory) cached = cached.filter((t) => t.category === selectedCategory)
-      cached.sort((a, b) => b.createdAt - a.createdAt)
+      const cached = stored
+        .filter((t) => !t.isDeleted)
+        .sort((a, b) => b.createdAt - a.createdAt)
 
-      // Only set if this is still the latest call and no mutation happening
       if (generation === loadGeneration.current && !isMutating.current) {
-        setTasks(cached)
+        setAllTasks(cached)
       }
       setLoading(false)
 
-      // Step 2: Fetch from API
+      // Step 2: Fetch ALL tasks from API — no category filter on API call
       const isOnline = await checkRealConnectivity()
       if (!isOnline) return
 
       const res = await getTasksAPI()
       if (!res.success || !res.data) return
 
-      // If a mutation happened while we were fetching — skip overwriting state
-      // The mutation already has the correct fresh data
       if (generation !== loadGeneration.current || isMutating.current) {
         console.log('loadTasks: skipping stale update')
         return
@@ -94,23 +94,20 @@ export const useTasks = (selectedCategory = null) => {
         isDeleted: false,
       }))
 
-      // Clean up IndexedDB — remove tasks deleted on server
+      // Clean IndexedDB
       const allStored = await getAllTasks()
       for (const t of allStored) {
         const existsOnServer = serverTasks.find((s) => s.id === t.id)
-        if (!existsOnServer && !t.syncStatus === 'pending') {
+        if (!existsOnServer && t.syncStatus !== 'pending') {
           await deleteTask(t.id)
         }
       }
       for (const task of serverTasks) await addTask(task)
 
-      // Final check before overwriting state
       if (generation === loadGeneration.current && !isMutating.current) {
-        let refreshed = serverTasks
-        if (selectedCategory) refreshed = refreshed.filter((t) => t.category === selectedCategory)
-        refreshed.sort((a, b) => b.createdAt - a.createdAt)
-        setTasks(refreshed)
-        console.log(`Loaded ${refreshed.length} tasks from server ✅`)
+        const sorted = [...serverTasks].sort((a, b) => b.createdAt - a.createdAt)
+        setAllTasks(sorted)
+        console.log(`Loaded ${sorted.length} tasks from server ✅`)
       }
 
     } catch (err) {
@@ -136,7 +133,7 @@ export const useTasks = (selectedCategory = null) => {
         const result = await syncTasksAPI(tasksToSync)
         console.log(`Synced ${result.synced} pending creates ✅`)
         for (const t of pendingCreates) await updateTask({ ...t, syncStatus: 'synced' })
-        setTasks((prev) =>
+        setAllTasks((prev) =>
           prev.map((t) => t.syncStatus === 'pending' ? { ...t, syncStatus: 'synced' } : t)
         )
       } catch (err) {
@@ -154,7 +151,7 @@ export const useTasks = (selectedCategory = null) => {
           const stored = await getAllTasks()
           const existing = stored.find((t) => t.id === op.payload.id)
           if (existing) await updateTask({ ...existing, ...op.payload.updates, syncStatus: 'synced' })
-          setTasks((prev) =>
+          setAllTasks((prev) =>
             prev.map((t) =>
               t.id === op.payload.id
                 ? { ...t, ...op.payload.updates, syncStatus: 'synced' }
@@ -193,9 +190,9 @@ export const useTasks = (selectedCategory = null) => {
       isDeleted: false,
     }
 
-    // Save to IndexedDB and update UI immediately
     await addTask(newTask)
-    setTasks((prev) => [newTask, ...prev.filter((t) => t.id !== newTask.id)])
+    // Add to allTasks — useMemo filter handles showing in right category
+    setAllTasks((prev) => [newTask, ...prev.filter((t) => t.id !== newTask.id)])
 
     if (isOnline) {
       try {
@@ -213,17 +210,14 @@ export const useTasks = (selectedCategory = null) => {
         console.error('API failed, queuing:', err)
         const queued = { ...newTask, syncStatus: 'pending' }
         await updateTask(queued)
-        setTasks((prev) => prev.map((t) => t.id === newTask.id ? queued : t))
+        setAllTasks((prev) => prev.map((t) => t.id === newTask.id ? queued : t))
         await registerBackgroundSync()
       }
     } else {
       await registerBackgroundSync()
     }
 
-    // Release mutation lock after a short delay
-    // so any in-flight loadTasks doesn't overwrite this new task
     setTimeout(() => { isMutating.current = false }, 1000)
-
     return newTask
   }
 
@@ -245,7 +239,7 @@ export const useTasks = (selectedCategory = null) => {
     }
 
     await updateTask(updated)
-    setTasks((prev) => prev.map((t) => t.id === id ? updated : t))
+    setAllTasks((prev) => prev.map((t) => t.id === id ? updated : t))
 
     if (isOnline) {
       try {
@@ -255,7 +249,7 @@ export const useTasks = (selectedCategory = null) => {
         console.error('Edit API failed, queuing:', err)
         const queued = { ...updated, syncStatus: 'pending' }
         await updateTask(queued)
-        setTasks((prev) => prev.map((t) => t.id === id ? queued : t))
+        setAllTasks((prev) => prev.map((t) => t.id === id ? queued : t))
         await addPendingOp({
           entity: 'task', type: 'update',
           payload: { id, updates: { text: newText.trim() } },
@@ -276,7 +270,7 @@ export const useTasks = (selectedCategory = null) => {
     isMutating.current = true
 
     const isOnline = await checkRealConnectivity()
-    const task = tasks.find((t) => t.id === id)
+    const task = allTasks.find((t) => t.id === id)
     if (!task) { isMutating.current = false; return }
 
     const updated = {
@@ -286,7 +280,7 @@ export const useTasks = (selectedCategory = null) => {
     }
 
     await updateTask(updated)
-    setTasks((prev) => prev.map((t) => t.id === id ? updated : t))
+    setAllTasks((prev) => prev.map((t) => t.id === id ? updated : t))
 
     if (isOnline) {
       try {
@@ -314,18 +308,15 @@ export const useTasks = (selectedCategory = null) => {
     isMutating.current = true
 
     const isOnline = await checkRealConnectivity()
-
-    // Read from IndexedDB — not stale React state
     const stored = await getAllTasks()
     const task = stored.find((t) => t.id === id)
 
-    // Remove from UI immediately
-    setTasks((prev) => prev.filter((t) => t.id !== id))
+    setAllTasks((prev) => prev.filter((t) => t.id !== id))
 
     if (isOnline) {
       try {
         await deleteTaskAPI(id)
-        if (task) await deleteTask(id)   // fully remove from IndexedDB
+        if (task) await deleteTask(id)
         console.log('Task deleted ✅')
       } catch (err) {
         console.error('Delete API failed, queuing:', err)
@@ -333,7 +324,6 @@ export const useTasks = (selectedCategory = null) => {
         await addPendingOp({ entity: 'task', type: 'delete', payload: { id } })
       }
     } else {
-      // Keep in IndexedDB as isDeleted:true so sync can delete on server later
       if (task) await updateTask({ ...task, isDeleted: true })
       await addPendingOp({ entity: 'task', type: 'delete', payload: { id } })
     }
